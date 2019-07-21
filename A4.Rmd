@@ -1,0 +1,538 @@
+---
+output: pdf_document
+---
+
+# FE590.  Assignment #4.
+
+
+## Enter Your Name Here, or "Anonymous" if you want to remain anonymous..
+## `r format(Sys.time(), "%Y-%m-%d")`
+
+
+# Instructions
+
+
+When you have completed the assignment, knit the document into a PDF file, and upload _both_ the .pdf and .Rmd files to Canvas.
+
+Note that you must have LaTeX installed in order to knit the equations below.  If you do not have it installed, simply delete the questions below.
+```{r message=FALSE, warning=FALSE, paged.print=FALSE}
+rm(list = ls())
+CWID = 10442266 #Place here your Campus wide ID number, this will personalize
+#your results, but still maintain the reproduceable nature of using seeds.
+#If you ever need to reset the seed in this assignment, use this as your seed
+#Papers that use -1 as this CWID variable will earn 0's so make sure you change
+#this value before you submit your work.
+personal = CWID %% 10000
+set.seed(personal)
+library(leaps)
+library(splines)
+library(gam)
+library(MASS)
+library(tree)
+library(randomForest)
+library(boot)
+library(gbm)
+library(class)
+library(e1071)
+library(glmnet)
+```
+# Question 1:
+In this assignment, you will be required to find a set of data to run regression on.  This data set should be financial in nature, and of a type that will work with the models we have discussed this semester (hint: we didn't look at time series)  You may not use any of the data sets in the ISLR package that we have been looking at all semester.  Your data set that you choose should have both qualitative and quantitative variables. (or has variables that you can transform)
+
+Provide a description of the data below, where you obtained it, what the variable names are and what it is describing.
+
+In this project, we try to find some relationship betweeen the sugar futures and other assets including 25 stocks that from food section and sugar producer companies and three major sugar producing countries' currency exchange rates (India,Brazil and Thailand) and the ethanol futures which is the other mojor product using the same raw material of sugar. We try to predict the sugar futures daily return using these assets.
+
+Athough according to the theory that the commodity futures price may be mainly infuluenced by the basic demand and supply situation which is more macro in sence, we can still try to find some formerly indicator to predic the short term price trend.
+
+In practice, the sugar and ethanol futures data are downloaded from Quandl and other exchange ratees and stock prices are from Yahoo Finance. After clearing the data, we combined them to a whole data set (called "all_data") and each column in the data set represents one asset. The first 25 column names are stocks' codes and next 3 are BRL, INR and THB which are exchange rates and the final two are ethanol and sugar denoting the futures price. 
+
+However the asset price data are not stationary. An efficient appraoch is to convert them to log return. Here we present part of our data.
+```{r warning=FALSE}
+# grader can change the direction to the file that contains the data set.
+setwd("D:/Grad 2/590/590Assignments/HW4/data") 
+all_data <- read.csv("all_data.csv",row.names = "X")
+all_data <- log(all_data[c(2:nrow(all_data)),]/all_data[c(1:nrow(all_data)-1),])
+all_data <- cbind(all_data[c(1:dim(all_data)[1]-1),
+                           c(1:dim(all_data)[2]-1)],
+                  all_data[c(2:dim(all_data)[1]),
+                           dim(all_data)[2]])
+colnames(all_data)[ncol(all_data)] <- c("sugar")
+print(head(all_data))
+```
+
+Now, we randomly divide them to two sets. Then we can implement different methods on training set and test them in test set.
+
+```{r}
+set.seed(1)
+train <- sample(nrow(all_data),floor(nrow(all_data)/2))
+trainset <- all_data[train,]
+testset <- all_data[-train,]
+```
+
+
+# Question 2:
+Pick a quantitative variable and fit at least four different models in order to predict that variable using the other predictors.  Determine which of the models is the best fit.  You will need to provide strong reasons as to why the particular model you chose is the best one.  You will need to confirm the model you have selected provides the best fit and that you have obtained the best version of that particular model (i.e. subset selection or validation for example).  You need to convince the grader that you have chosen the best model.
+
+To conduct regression on the quantitative variable, we use 4 method to do it. 
+
+1, Multiple Linear Regression with subset selection and lasso/ridge modification.
+
+2, Polynomial Regression with subset selection.
+
+3, GAM with different model selection.
+
+4, Regression Tree with parameters selected by cross-validation.
+
+## Multiple Linear Regression
+
+Now we perform the multiple linear regression. First of all, we do the subset selection to determine which variable is more likely to be included in the model.
+
+```{r}
+# Multiple Linear Regression (lasso and ridge)
+# subset selection
+subsets=regsubsets(sugar~.,data=trainset,method="exhaustive",nvmax=30)
+summary(subsets)
+```
+
+In order to determin the number of variables, we plot several indicators against the number of variables to find the best one.
+
+```{r}
+# number of the variable
+regfit.summary = summary(subsets)
+par(mfrow=c(1,3))
+plot(regfit.summary$adjr2,xlab="Number of Variables",ylab="Adjusted RSq",type="l")
+points(which.max(regfit.summary$adjr2)
+       ,regfit.summary$adjr2[which.max(regfit.summary$adjr2)]
+       ,col="red",cex=2,pch=20)
+
+plot(regfit.summary$cp,xlab="Number of Variables",ylab="Cp",type="l")
+points(which.min(regfit.summary$cp)
+       ,regfit.summary$cp[which.min(regfit.summary$cp)]
+       ,col="red",pch=20,cex=2)
+
+plot(regfit.summary$bic,xlab="Number of Variables",ylab="BIC",type='l')
+points(which.min(regfit.summary$bic)
+       ,regfit.summary$bic[which.min(regfit.summary$bic)]
+       ,col="red",pch=20,cex=2)
+```
+
+These plots suggest different results, Here we select 8 variables which is the mean of the first two plot suggest. The 8 varaibles contain 7 stocks and INR/USD exchange rate. After regression, we give the summary of the model and the test MSE. 
+
+```{r}
+fit1 = lm(sugar~FARM+CALM+NATR+INR+FDP+HAIN+RIBT+NAII,data = trainset)
+summary((fit1))
+prediction1 = predict(fit1,testset)
+mse1 = mean((prediction1-testset$sugar)^2)
+```
+```{r}
+print(mse1)
+```
+
+As we can see from the result, the last 3 variable is not statistical significant and the $R^2$ is not good enough actually, and the MSE is about 0.000487. 
+
+In the rest of this section, we try to use the Lasso and Ridge Regression approacheds to get rid of the subset selection. By using the Lasso and Ridge, we can directly perform a regression on the whole predictors and the model will itself determine which variable to choose. The shrinkage parameter is determined by the CV method, we use the beat $\lambda$ to do the prediction on test set.
+
+```{r}
+# lasso
+x_train = as.matrix(trainset[,-ncol(trainset)])
+y_train = trainset$sugar
+x_test = as.matrix(testset[,-ncol(testset)])
+y_test = testset$sugar
+
+lasso.mod = glmnet(x_train,y_train,alpha = 1)
+set.seed(1)
+cv.out = cv.glmnet(x_train,y_train,alpha=1)
+bestlam = cv.out$lambda.min
+lasso.pred = predict(lasso.mod,s = bestlam,newx = x_test)
+mse11 = mean((lasso.pred-y_test)^2)
+lasso.coeff = predict(cv.out,type="coefficients",s = bestlam)
+print(lasso.coeff)
+```
+```{r}
+print(mse11)
+```
+
+We can see that the Lasso approach gives almost same subset selection with previous method, however the test MSE indeed improve which is 0.000469.
+
+An alternative way to do the same thing is Ridge Regression. We don't present too much detial of this method, and only give the final test MSE.
+```{r}
+# ridge
+ridge.mod = glmnet(x_train,y_train,alpha = 0)
+set.seed(1)
+cv.out2 = cv.glmnet(x_train,y_train,alpha=0)
+bestlam2 = cv.out2$lambda.min
+ridge.pred = predict(ridge.mod,s = bestlam2,newx = x_test)
+mse12 = mean((ridge.pred-y_test)^2)
+print(mse12)
+```
+
+The ridge Reggression gives us the test MSE of 0.000463 which is the best one so far.
+
+## Polynomial Regression
+
+To simplify the problem, we only try the degree up to 3. What's more, we use again the subset selection to select the best variables with proper power. We don't present the summary of the subset selection result here because it is too complicated. The final polynomial model is conducted at the final.  
+```{r}
+subsets2=regsubsets(sugar~poly(CZZ,3,raw = T)+poly(MDLZ,3,raw = T)
+                    +poly(TR,3,raw = T)+poly(HSY,3,raw = T)+poly(RMCF,3,raw = T)
+                    +poly(BRID,3,raw = T)
+                    +poly(CALM,3,raw = T)+poly(CVGW,3,raw = T)
+                    +poly(JVA,3,raw = T)+poly(FARM,3,raw = T)
+                    +poly(FLO,3,raw = T)+poly(FDP,3,raw = T)
+                    +poly(HAIN,3,raw = T)+ poly(JJSF,3,raw = T)
+                    + poly(JBSS,3,raw = T)+ poly(LANC,3,raw = T)
+                    + poly(MTEX,3,raw = T)+ poly(MKC,3,raw = T)
+                    + poly(NAII,3,raw = T)+ poly(NATR,3,raw = T)+
+                      poly(POST,3,raw = T)+ poly(RELV,3,raw = T)
+                    + poly(RIBT,3,raw = T)+ poly(STKL,3,raw = T)
+                    + poly(SJM,3,raw = T)+ poly(BRL,3,raw = T)
+                    + poly(INR,3,raw = T)+ poly(THB,3,raw = T)
+                    + poly(ethanol,3,raw = T),data=trainset,method="forward",nvmax=20)
+
+# choose FARM, CALM, CALM^2, NATR, INR, FDP, FDP^2, BRL^2 as the factors.
+fit2 = lm(sugar~FARM+poly(CALM,2,raw=T)+NATR+INR+poly(FDP,2,raw = T)+I(BRL^2),data = trainset)
+summary(fit2)
+```
+```{r}
+prediction2 = predict(fit2,testset)
+mse2 = mean((prediction2-testset$sugar)^2)
+print(mse2)
+```
+
+As we can see, the polynomial model improve the performance on the train set. The test MSE is 0.000495 which refers that this model may overfit the train set. However the model indeed suggest that the higher power of the variable is required to improve the simple linear regression.
+
+## GAM
+
+```{r warning=FALSE}
+# GAM (try different combination and local regression)
+fit31 = gam(sugar~s(FARM,3)+s(CALM,3)+s(NATR,3)
+            +s(INR,3),data=trainset)
+fit32 = gam(sugar~s(FARM,3)+s(CALM,3)+s(NATR,3)+s(INR,3)
+            +s(FDP,3)+s(BRL,3),data=trainset)
+fit33 = gam(sugar~s(FARM,3)+s(CALM,3)+s(CALM^2,3)+s(NATR,3)
+            +s(INR,3),data=trainset)
+fit34 = gam(sugar~s(FARM,3)+s(CALM,3)+s(CALM^2,3)+s(NATR,3)
+            +s(INR,3)+s(FDP,3)+s(FDP^2,3),data=trainset)
+fit35 = gam(sugar~s(FARM,3)+s(CALM,3)+s(CALM^2,3)+s(NATR,3)
+            +s(INR,3)+s(FDP,3)+s(FDP^2,3)+s(BRL^2,3),data=trainset)
+fit36 = gam(sugar~s(FARM,3)+s(CALM,3)+s(NATR,3)+s(INR,3)
+            +s(FDP,3)+s(BRL,3)+lo(CALM,span = 0.5)+lo(FDP,span = 0.5),data=trainset)
+anova(fit31,fit32,fit33,fit34,fit35,fit36)
+```
+
+After trying different model, the fourth model gives the best performance. We use it on the test set to see the accuracy. Through the anova function in the R, we can determine that the fourth model improve the model previously.
+
+```{r}
+prediction34 = predict(fit34,testset)
+mse34 = mean((prediction34-testset$sugar)^2)
+print(mse34)
+```
+
+From the result, we can tell that the MSE of test set using this GAM mthod is 0.000498. 
+
+## Regression Tree
+
+In this section, we try to use different desicion tree to predict the sugar futures return. We use the normal tree method and boosting method and bagging method. 
+
+```{r}
+# normal tree
+fit4 = tree(sugar~.,data = trainset)
+prediction4 = predict(fit4,trainset)
+mse_train_41 = mean((prediction4-trainset$sugar)^2)
+
+# boosting
+means_43=rep(0,99)
+set.seed(1)
+pows <- seq(-10, -0.2, by = 0.1)
+lambdas <- 10^pows
+for (i in 1:99){
+  fit43=gbm(sugar~.,data = trainset,distribution = "gaussian"
+               , n.trees = 1000, interaction.depth = 2,shrinkage = lambdas[i])
+  pred43=predict(fit43,newdata=trainset,n.trees = 1000)
+  means_43[i] = mean((trainset$sugar-pred43)^2)
+}
+plot(lambdas,means_43,type='b',xlab = "Shrinkage values", ylab = "Training MSE")
+
+fit43 = gbm(sugar~.,data = trainset,distribution = "gaussian"
+            , n.trees = 1000, interaction.depth = 2,shrinkage = 0.2)
+prediction43 = predict(fit43,trainset,n.trees = 1000)
+mse_train_43 = mean((prediction43-trainset$sugar)^2)
+
+# bagging
+set.seed(1)
+fit44 = randomForest(sugar~.,data = trainset,mtry = 29,importance = T)
+prediction44 = predict(fit44,trainset)
+mse_train_44 = mean((prediction44-trainset$sugar)^2)
+```
+
+```{r}
+print(mse_train_41)
+print(mse_train_43)
+print(mse_train_44)
+```
+
+However, we find the boosting method tree is the best in the train set. Note that we use corss-validation to determine the shrinkage parameter $\lambda$ which is 0.2 here. We determin it from the plot when shrinkage is 0.2, it first hit the relatively low level.
+
+After using boosting and bagging, then we use the boosting method tree in the test set.
+```{r}
+pred_tree = predict(fit43,testset,n.trees = 1000)
+mse41 = mean((pred_tree-testset$sugar)^2)
+print(mse41)
+```
+
+## Conclusion
+
+```{r}
+conclusion1 = data.frame(c(mse1,mse11,mse12,mse2,mse34,mse41),row.names = c("linear regression","Lasso","Ridge","Polynomial","GAM","boosted tree"))
+colnames(conclusion1) = "test MSE"
+print(conclusion1)
+```
+As we can see, the Ridge regression is the best model which has the lowest test MSE. We use different method and the best version of that method (which is ditermined by the validation set error or train set error) to predict the log return of the sugar price and find the Ridge regression will give the best answer.
+
+#Question 3:
+
+Do the same approach as in question 2, but this time for a qualitative variable.
+
+Now we convert the previously data to the qualitative variable, we convert the sugar data to be either "up" or "down". When the return is negetive, the variable will be down, else will be up.
+
+```{r}
+clas_data <- all_data
+sugar_der <- rep(1,nrow(clas_data))
+sugar_der[which(clas_data$sugar>=0)] = "up"
+sugar_der[which(clas_data$sugar<0)] = "down"
+sugar_der <- as.factor(sugar_der)
+clas_data$sugar <- sugar_der
+clas_train <- sample(nrow(clas_data),floor(nrow(clas_data)/2))
+clas_trainset <- clas_data[clas_train,]
+clas_testset <- clas_data[-clas_train,]
+```
+
+In this section, we use several appraoches to do the classificaiton problem.
+
+They are:
+
+1, Logistic Regression
+
+2, LDA/QDA
+
+3, KNN with different k
+
+4, SVM with different kernel and parameters.
+
+## Logistic Regression
+
+```{r}
+logfit=glm(sugar~.,data=clas_trainset,family=binomial)
+result1 = predict(logfit,clas_testset,type = "response")
+test_predict1 = rep(1,nrow(clas_testset))
+test_predict1[which(result1>=0.5)] <- "up"
+test_predict1[which(result1<0.5)] <- "down"
+res_table1 = table(test_predict1,clas_testset$sugar)
+acc1 = (res_table1[1,1]+res_table1[2,2])/sum(res_table1)
+print(res_table1)
+```
+
+```{r}
+print(acc1)
+```
+```{r}
+summary(logfit)
+```
+
+The accuracy of this regression on the test set is 0.5245. Note that we include all the variable into the model, an alternative way is to use the lasso for logistic regression, however we didn't cover that issue in the course. The results are not good enough, we try to caliberate this model by select the variable that is significant.
+
+```{r}
+logfit12=glm(sugar~JVA+FARM+FDP+MKC+NATR+RIBT+ethanol,data=clas_trainset,family=binomial)
+result12 = predict(logfit12,clas_testset,type = "response")
+test_predict12 = rep(1,nrow(clas_testset))
+test_predict12[which(result12>=0.5)] <- "up"
+test_predict12[which(result12<0.5)] <- "down"
+res_table12 = table(test_predict12,clas_testset$sugar)
+acc12 = (res_table12[1,1]+res_table12[2,2])/sum(res_table12)
+print(res_table12)
+```
+
+After selecting the significant variables, we indeed improve the logistic regression's performance.
+
+## LDA/QDA
+
+```{r}
+#LDA/QDA
+ldafit=lda(sugar~.,data=clas_trainset)
+result2 = predict(ldafit,clas_testset,type = "response")$class
+res_table2 = table(result2,clas_testset$sugar)
+acc21 = (res_table2[1,1]+res_table2[2,2])/sum(res_table2)
+print(acc21)
+```
+
+Using the LDA method we can get the accuracy of 0.5262 on the test set. 
+
+```{r}
+qdafit = qda(sugar~.,data=clas_trainset)
+result3 = predict(qdafit,clas_testset,type = "response")$class
+res_table3 = table(result3,clas_testset$sugar)
+acc22 = (res_table3[1,1]+res_table3[2,2])/sum(res_table3)
+print(acc22)
+```
+
+Using the QDA method we can get the accuracy of 0.4808 on the test set which is not better than the LDA method. 
+
+## KNN
+
+```{r}
+# KNN (different k)
+set.seed(1)
+clas_train <- sample(nrow(clas_trainset),floor(nrow(clas_trainset)/2))
+clas_trainset_t <- clas_trainset[clas_train,]
+clas_trainset_v<- clas_trainset[-clas_train,]
+acc3_table = rep(1,9)
+for (k_ in c(1:9)){
+  knnfit1=knn(clas_trainset_t[,c(1:ncol(clas_trainset_t)-1)],
+              clas_trainset_v[,c(1:ncol(clas_trainset_v)-1)],clas_trainset_v$sugar,k=k_)
+  res_table4 = table(knnfit1,clas_trainset_v$sugar)
+  acc3_table[k_] = (res_table4[1,1]+res_table4[2,2])/sum(res_table4)
+}
+
+print(acc3_table)
+bestk = which.max(acc3_table)
+plot(c(1:9),acc3_table,type='b',xlab = "k", ylab = "Validation set accuracy")
+```
+
+Note that we use the cross-validation method to determine the best "k", and we here use simply cross-validation. We may get a high accuracy by using k = 2, because we can get 0.5944 accuracy on the validation set which is the best version of this knn model. Now we use this parameter and model on the test set.
+
+```{r}
+knnfit1=knn(clas_trainset[,c(1:ncol(clas_trainset)-1)],
+            clas_testset[,c(1:ncol(clas_testset)-1)],clas_testset$sugar,k=bestk)
+res_table5 = table(knnfit1,clas_testset$sugar)
+acc3 = (res_table5[1,1]+res_table5[2,2])/sum(res_table5)
+print(acc3)
+```
+
+When we use the whole train set to predict the test set, we will get an accuracy of 0.5297.
+
+## SVM
+
+In this method we try to have different kernels and parameters to get the best SVM model.
+
+```{r warning=FALSE}
+# SVM (different kernel)
+set.seed(1)
+tune.out = tune(svm,sugar~.,data = clas_trainset,kernel="linear",
+                ranges = list(cost=c(0.001,0.01,0.1,1.5,10,100)))
+
+bestmod41 = tune.out$best.model
+result41 = predict(bestmod41,clas_testset)
+res_table61 = table(result41,clas_testset$sugar)
+acc41 = (res_table61[1,1]+res_table61[2,2])/sum(res_table61)
+
+set.seed(1)
+tune.out = tune(svm,sugar~.,data = clas_trainset,kernel="polynomial",
+                ranges = list(cost=c(0.001,0.01,0.1,1.5,10,100),degree = c(2,3,4)))
+
+bestmod42 = tune.out$best.model
+result42 = predict(bestmod42,clas_testset)
+res_table62 = table(result42,clas_testset$sugar)
+acc42 = (res_table62[1,1]+res_table62[2,2])/sum(res_table61)
+
+set.seed(1)
+tune.out = tune(svm,sugar~.,data = clas_trainset,kernel="radial",
+                ranges = list(cost=c(0.001,0.01,0.1,1.5,10,100),gamma = c(0.01,0.1,1,3,5,10,100)))
+
+bestmod43 = tune.out$best.model
+result43 = predict(bestmod43,clas_testset)
+res_table63 = table(result43,clas_testset$sugar)
+acc43 = (res_table63[1,1]+res_table63[2,2])/sum(res_table63)
+
+print(acc41)
+print(acc42)
+print(acc43)
+```
+
+The first one and the last one give the same best results. which is the accuracy of 52.62%.
+
+## Conclusion
+
+Here we present the final results of model above.
+
+```{r}
+conclusion2 = data.frame(c(acc12,acc21,acc22,acc3,acc41),row.names = c("Logistic regression","LDA","QDA","KNN k=2","SVM linear & radial"))
+colnames(conclusion2) = "test accuracy"
+print(conclusion2)
+```
+
+So the Logistic regression will give us the highest test accuracy result. And the best version of the Logistic regression is that doing a regression on a subset of variables.
+
+
+#Question 4:
+
+(Based on ISLR Chapter 9 #7) In this problem, you will use support vector approaches in order to
+predict whether a given car gets high or low gas mileage based on the
+Auto
+data set.
+
+##(a)
+Create a binary variable that takes on a 1 for cars with gas mileage above the median, and a 0 for cars with gas mileage below the median.
+```{r}
+rm(list = ls())
+CWID = 10442266 
+personal = CWID %% 10000
+library(ISLR)
+auto_data = Auto
+bi_variable = rep(1,nrow(auto_data))
+bi_variable[which(auto_data$mpg>median(auto_data$mpg))] <- 1
+bi_variable[which(auto_data$mpg<=median(auto_data$mpg))] <- 0
+auto_data$bi_variable = as.factor(bi_variable)
+```
+
+##(b)
+Fit a support vector classifier to the data with various values of cost, in order to predict whether a car gets high or low gas mileage. Report the cross-validation errors associated with different values of this parameter. Comment on your results.
+```{r}
+library(e1071)
+set.seed(personal)
+tune.out2 = tune(svm,bi_variable~.,data = auto_data,kernel = "linear",range = list(cost = c(0.01,0.1,1,5,10,100)))
+summary(tune.out2)
+```
+When the cost equals to 1, the error reaches the lowest level.
+
+##(c)
+Now repeat for (b), this time using SVMs with radial and polynomial basis kernels, with different values of gamma and degree and cost. Comment on your results.
+
+```{r}
+set.seed(personal)
+tune.out3 = tune(svm,bi_variable~.,data = auto_data,kernel="radial",ranges = list(cost=c(0.01,0.1,1,5,10,100),gamma = c(0.01,0.1,1,3,5,10,100)))
+summary(tune.out3)
+```
+For radial kernel, when cost=100 and gamma = 0.01, the error will get the lowest level.
+
+
+```{r}
+set.seed(personal)
+tune.out4 = tune(svm,bi_variable~.,data = auto_data,kernel="polynomial",ranges = list(cost=c(0.01,0.1,1,5,10,100),degree = c(2,3,4)))
+summary(tune.out4)
+
+```
+When using the polynomial basis kernel, the cv error reaches its lowest level for cost equals to 100 and dgree equals to 2.
+##(d)
+Make some plots to back up your assertions in (b) and (c). Hint: In the lab, we used the plot() function for svm objects only in cases with p=2 When p>2,you can use the plot() function to create plots displaying pairs of variables at a time. Essentially, instead of typing plot(svmfit , dat) where svmfit contains your fitted model and dat is a data frame containing your data, you can type plot(svmfit , dat, x1~x4) in order to plot just the first and fourth variables. However, you must replace x1 and x4 with the correct variable names. To find out more, type ?plot.svm.
+
+```{r}
+bestmod.lin = tune.out2$best.model
+bestmod.rad = tune.out3$best.model
+bestmod.pol = tune.out4$best.model
+for (name in c("cylinders","displacement","horsepower","weight","acceleration","year","origin")){
+  plot(bestmod.lin,auto_data,as.formula(paste("mpg~",name,sep="")))
+}
+```
+This is the graphs that using the linear kernel.
+```{r}
+for (name in c("cylinders","displacement","horsepower","weight","acceleration","year","origin")){
+  plot(bestmod.pol,auto_data,as.formula(paste("mpg~",name,sep="")))
+}
+```
+The above is the graphs that using the polynomial kernel.
+```{r}
+for (name in c("cylinders","displacement","horsepower","weight","acceleration","year","origin")){
+  plot(bestmod.rad,auto_data,as.formula(paste("mpg~",name,sep="")))
+}
+```
+The above is the graphs that using the radial kernel.
